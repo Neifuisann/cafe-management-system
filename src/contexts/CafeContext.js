@@ -7,7 +7,8 @@ import {
   addDoc, 
   updateDoc, 
   doc,
-  getDocs
+  getDocs,
+  where
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 
@@ -48,7 +49,13 @@ export function CafeProvider({ children }) {
 
   // Fetch orders from Firestore with real-time updates
   const fetchOrders = () => {
-    const ordersQuery = query(collection(db, 'orders'), orderBy('timestamp', 'desc'));
+    // Query that excludes 'completed' orders, only getting 'pending' and 'in-progress' orders
+    const ordersQuery = query(
+      collection(db, 'orders'), 
+      where('status', 'in', ['pending', 'in-progress']),
+      orderBy('timestamp', 'desc')
+    );
+    
     const unsubscribe = onSnapshot(ordersQuery, (snapshot) => {
       const ordersData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -108,45 +115,65 @@ export function CafeProvider({ children }) {
   // Update order status
   const updateOrderStatus = async (orderId, status) => {
     try {
-      const orderRef = doc(db, 'orders', orderId);
-      await updateDoc(orderRef, { status });
-      
-      const updatedOrder = {
-        ...state.orders.find(order => order.id === orderId),
-        status
-      };
-      
-      dispatch({ type: 'UPDATE_ORDER', payload: updatedOrder });
-      return updatedOrder;
+      const result = await updateOrder(orderId, { status });
+      return result;
     } catch (error) {
-      console.error('Error updating order:', error);
+      console.error('Error updating order status:', error);
       dispatch({ type: 'SET_ERROR', payload: error.message });
-      throw error;
+      return null;
     }
   };
 
   // General update order function
   const updateOrder = async (orderId, updates) => {
     try {
+      // First check if the order exists in Firestore
       const orderRef = doc(db, 'orders', orderId);
-      await updateDoc(orderRef, updates);
       
+      // Check if the update includes changing status to 'completed'
+      // If we're marking as complete, we need to update Firestore but may not have the order in state
+      const markingAsCompleted = updates.status === 'completed';
+      
+      // Get the current order from state
       const currentOrder = state.orders.find(order => order.id === orderId);
-      if (!currentOrder) {
-        throw new Error(`Order with ID ${orderId} not found`);
+      
+      // If order doesn't exist in our state and we're not marking as completed, throw error
+      if (!currentOrder && !markingAsCompleted) {
+        console.warn(`Order with ID ${orderId} not found in state`);
+        return null;
       }
       
-      const updatedOrder = {
-        ...currentOrder,
-        ...updates
-      };
+      // Try to update in Firestore
+      try {
+        await updateDoc(orderRef, updates);
+      } catch (error) {
+        // If document doesn't exist and we're marking as completed, we can ignore
+        // This happens because we filter out completed orders in our query
+        if (error.code === 'not-found' && markingAsCompleted) {
+          console.info(`Order ${orderId} already removed or completed`);
+          return null;
+        }
+        throw error; // Re-throw for other errors
+      }
       
-      dispatch({ type: 'UPDATE_ORDER', payload: updatedOrder });
-      return updatedOrder;
+      if (currentOrder) {
+        // Update local state if we have the order
+        const updatedOrder = {
+          ...currentOrder,
+          ...updates
+        };
+        
+        dispatch({ type: 'UPDATE_ORDER', payload: updatedOrder });
+        return updatedOrder;
+      } else {
+        // If we don't have the order in state (e.g., it's completed), just return the updates
+        return { id: orderId, ...updates };
+      }
     } catch (error) {
       console.error('Error updating order:', error);
       dispatch({ type: 'SET_ERROR', payload: error.message });
-      throw error;
+      // Return null instead of throwing to prevent app crashes
+      return null;
     }
   };
 

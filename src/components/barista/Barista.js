@@ -18,12 +18,10 @@ const Barista = () => {
   const { orders, updateOrder } = useCafe();
   
   const [sortMethod, setSortMethod] = useState('oldest'); // 'oldest' or 'newest'
-  const [filter, setFilter] = useState('pending'); // 'all', 'pending', 'in-progress', 'completed'
+  const [filter, setFilter] = useState('pending'); // Only 'pending' or 'in-progress' now
   const [orderCounts, setOrderCounts] = useState({
-    all: 0,
     pending: 0,
-    'in-progress': 0,
-    completed: 0
+    'in-progress': 0
   });
   
   // Calculate order counts for each status
@@ -33,10 +31,8 @@ const Barista = () => {
     );
     
     const counts = {
-      all: uniqueOrders.length,
       pending: uniqueOrders.filter(order => order.status === 'pending').length,
       'in-progress': uniqueOrders.filter(order => order.status === 'in-progress').length,
-      completed: uniqueOrders.filter(order => order.status === 'completed').length
     };
     
     setOrderCounts(counts);
@@ -45,7 +41,10 @@ const Barista = () => {
   // Toggle pin status of an order
   const togglePinOrder = async (orderId, isPinned) => {
     try {
-      await updateOrder(orderId, { pinned: !isPinned });
+      const result = await updateOrder(orderId, { pinned: !isPinned });
+      if (!result) {
+        console.warn(`Could not pin order ${orderId}, it may have been completed or removed`);
+      }
     } catch (error) {
       console.error('Error toggling pin status:', error);
     }
@@ -54,7 +53,10 @@ const Barista = () => {
   // Update order status
   const updateOrderStatus = async (orderId, status) => {
     try {
-      await updateOrder(orderId, { status });
+      const result = await updateOrder(orderId, { status });
+      if (!result) {
+        console.warn(`Could not update status for order ${orderId}, it may have been completed or removed`);
+      }
     } catch (error) {
       console.error('Error updating order status:', error);
     }
@@ -78,10 +80,19 @@ const Barista = () => {
         const allItemsComplete = updatedItems.every(item => item.completed);
         
         // Update the order
-        await updateOrder(orderId, { 
+        const result = await updateOrder(orderId, { 
           items: updatedItems,
           status: allItemsComplete ? 'completed' : 'in-progress'
         });
+        
+        if (!result && allItemsComplete) {
+          // If we're completing the order but can't update it, it's likely already completed
+          console.info(`Order ${orderId} items marked as complete. Order may have been removed from view.`);
+        } else if (!result) {
+          console.warn(`Could not update items for order ${orderId}, it may have been completed or removed`);
+        }
+      } else {
+        console.warn(`Order ${orderId} not found in current state`);
       }
     } catch (error) {
       console.error('Error updating item status:', error);
@@ -110,10 +121,8 @@ const Barista = () => {
     
     let filteredOrders = [...ordersWithNumbers];
     
-    // Apply status filter
-    if (filter !== 'all') {
-      filteredOrders = filteredOrders.filter(order => order.status === filter);
-    }
+    // Apply status filter - only pending or in-progress
+    filteredOrders = filteredOrders.filter(order => order.status === filter);
     
     // Sort filtered orders based on pin status and timestamp
     filteredOrders.sort((a, b) => {
@@ -141,10 +150,8 @@ const Barista = () => {
   // Helper to get status name
   const getStatusName = (statusKey) => {
     switch(statusKey) {
-      case 'all': return 'Tất Cả';
       case 'pending': return 'Chờ';
       case 'in-progress': return 'Làm';
-      case 'completed': return 'Xong';
       default: return statusKey;
     }
   };
@@ -172,14 +179,6 @@ const Barista = () => {
               </label>
               <div className="filter-buttons">
                 <button 
-                  className={`filter-btn ${filter === 'all' ? 'active' : ''}`}
-                  onClick={() => setFilter('all')}
-                  title="Tất Cả Đơn Hàng"
-                >
-                  <FaListUl />
-                  <span className="count-badge">{orderCounts.all}</span>
-                </button>
-                <button 
                   className={`filter-btn ${filter === 'pending' ? 'active' : ''}`}
                   onClick={() => setFilter('pending')}
                   title="Đơn Hàng Đang Chờ"
@@ -197,16 +196,6 @@ const Barista = () => {
                   <FaSpinner />
                   {orderCounts['in-progress'] > 0 && (
                     <span className="count-badge">{orderCounts['in-progress']}</span>
-                  )}
-                </button>
-                <button 
-                  className={`filter-btn ${filter === 'completed' ? 'active' : ''}`}
-                  onClick={() => setFilter('completed')}
-                  title="Đơn Hàng Đã Hoàn Thành"
-                >
-                  <FaCheckCircle />
-                  {orderCounts.completed > 0 && (
-                    <span className="count-badge">{orderCounts.completed}</span>
                   )}
                 </button>
               </div>
@@ -232,11 +221,6 @@ const Barista = () => {
         
         <div className="filter-info">
           <span>Hiển thị <strong>{filteredOrders.length}</strong> {getStatusName(filter)}</span>
-          {filter !== 'all' && (
-            <button className="clear-filter" onClick={() => setFilter('all')}>
-              Hiển Thị Tất Cả Đơn Hàng
-            </button>
-          )}
         </div>
         
         <div className="card-body">
